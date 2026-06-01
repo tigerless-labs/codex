@@ -48,6 +48,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Context,
     DebugConfig,
     Title,
     Statusline,
@@ -106,6 +107,7 @@ impl SlashCommand {
             }
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Context => "show the exact context-floor token breakdown (system prompt, tools, MCP, input)",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -182,6 +184,7 @@ impl SlashCommand {
                 | SlashCommand::Diff
                 | SlashCommand::Mention
                 | SlashCommand::Status
+                | SlashCommand::Context
                 | SlashCommand::Ide
         )
     }
@@ -220,6 +223,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Hooks
             | SlashCommand::Status
+            | SlashCommand::Context
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

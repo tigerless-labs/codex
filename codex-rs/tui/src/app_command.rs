@@ -96,6 +96,7 @@ pub(crate) enum AppCommand {
         cwds: Vec<PathBuf>,
         force_reload: bool,
     },
+    ContextBreakdown,
     Compact,
     SetThreadName {
         name: String,
@@ -265,6 +266,10 @@ impl AppCommand {
 
     pub(crate) fn list_skills(cwds: Vec<PathBuf>, force_reload: bool) -> Self {
         Self::ListSkills { cwds, force_reload }
+    }
+
+    pub(crate) fn context_breakdown() -> Self {
+        Self::ContextBreakdown
     }
 
     pub(crate) fn compact() -> Self {

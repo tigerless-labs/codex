@@ -1101,6 +1101,22 @@ impl AppServerSession {
             .wrap_err("skills/list failed in TUI")
     }
 
+    pub(crate) async fn context_breakdown(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<codex_app_server_protocol::ContextBreakdownResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ContextBreakdown {
+                request_id,
+                params: codex_app_server_protocol::ContextBreakdownParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/context/breakdown failed in TUI")
+    }
+
     pub(crate) async fn reload_user_config(&mut self) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ConfigWriteResponse = self

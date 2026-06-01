@@ -20,6 +20,8 @@ use crate::state_db_bridge::StateDbHandle;
 use crate::thread_manager::ThreadManager;
 use crate::thread_manager::thread_store_from_config;
 use codex_extension_api::empty_extension_registry;
+use codex_tools::ContextBreakdown;
+use codex_tools::compute_context_breakdown;
 
 /// Build the model-visible `input` list for a single debug turn.
 #[doc(hidden)]
@@ -71,10 +73,73 @@ pub async fn build_prompt_input(
     output
 }
 
+/// Build the in-process context-floor token breakdown for a single debug turn.
+/// Mirrors [`build_prompt_input`] but returns the tokenized breakdown behind a
+/// native `/context`.
+#[doc(hidden)]
+pub async fn build_context_breakdown(
+    mut config: Config,
+    input: Vec<UserInput>,
+    state_db: Option<StateDbHandle>,
+) -> CodexResult<ContextBreakdown> {
+    config.ephemeral = true;
+
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        config.codex_self_exe.clone(),
+        config.codex_linux_sandbox_exe.clone(),
+    )?;
+
+    let thread_store = thread_store_from_config(&config, state_db.clone());
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
+    let thread_manager = ThreadManager::new(
+        &config,
+        Arc::clone(&auth_manager),
+        SessionSource::Exec,
+        Arc::new(
+            EnvironmentManager::from_codex_home(
+                config.codex_home.clone(),
+                Some(local_runtime_paths),
+            )
+            .await
+            .map_err(|err| CodexErr::Fatal(err.to_string()))?,
+        ),
+        empty_extension_registry(),
+        /*analytics_events_client*/ None,
+        thread_store,
+        state_db.clone(),
+        installation_id,
+        /*attestation_provider*/ None,
+    );
+    let thread = thread_manager.start_thread(config).await?;
+
+    let output =
+        build_context_breakdown_from_session(thread.thread.codex.session.as_ref(), input).await;
+    let shutdown = thread.thread.shutdown_and_wait().await;
+    let _removed = thread_manager.remove_thread(&thread.thread_id).await;
+
+    shutdown?;
+    output
+}
+
 pub(crate) async fn build_prompt_input_from_session(
     sess: &Session,
     input: Vec<UserInput>,
 ) -> CodexResult<Vec<ResponseItem>> {
+    let (prompt, _window) = build_prompt_and_window_from_session(sess, input).await?;
+    Ok(prompt.get_formatted_input())
+}
+
+/// Assemble the full would-be model request for a turn (the same `Prompt` that
+/// [`build_prompt_input_from_session`] derives its input from) and report the
+/// model's context window. The shared core for both the input dump and the
+/// `/context` token breakdown.
+pub(crate) async fn build_prompt_and_window_from_session(
+    sess: &Session,
+    input: Vec<UserInput>,
+) -> CodexResult<(crate::client_common::Prompt, Option<i64>)> {
     let turn_context = sess.new_default_turn().await;
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
@@ -97,6 +162,26 @@ pub(crate) async fn build_prompt_input_from_session(
         turn_context.as_ref(),
         base_instructions,
     );
+    let window = turn_context.model_info.resolved_context_window();
 
-    Ok(prompt.get_formatted_input())
+    Ok((prompt, window))
+}
+
+/// Compute the in-process context-floor token breakdown for a single turn —
+/// the data behind a native `/context`. Uses the exact components the request
+/// is assembled from (`instructions`, `tools`, `input`), tokenized with
+/// `o200k_base`.
+pub(crate) async fn build_context_breakdown_from_session(
+    sess: &Session,
+    input: Vec<UserInput>,
+) -> CodexResult<ContextBreakdown> {
+    let (prompt, window) = build_prompt_and_window_from_session(sess, input).await?;
+    let formatted_input = prompt.get_formatted_input();
+    compute_context_breakdown(
+        &prompt.base_instructions.text,
+        &prompt.tools,
+        &formatted_input,
+        window,
+    )
+    .map_err(|e| CodexErr::Fatal(format!("context breakdown serialization failed: {e}")))
 }

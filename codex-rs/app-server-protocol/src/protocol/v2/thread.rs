@@ -907,6 +907,39 @@ pub struct ThreadCompactStartResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ContextBreakdownParams {
+    pub thread_id: String,
+}
+
+/// One named token bucket (a source, a tool, or an input kind).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ContextTokenBucket {
+    pub label: String,
+    pub tokens: u64,
+    pub count: u64,
+}
+
+/// In-process context-floor token breakdown for the thread's next request.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ContextBreakdownResponse {
+    pub system_prompt_tokens: u64,
+    pub builtin_tools_tokens: u64,
+    pub mcp_tools_tokens: u64,
+    pub input_tokens: u64,
+    pub total_tokens: u64,
+    pub context_window: Option<i64>,
+    pub per_tool: Vec<ContextTokenBucket>,
+    pub per_input_kind: Vec<ContextTokenBucket>,
+    pub per_tool_output: Vec<ContextTokenBucket>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadShellCommandParams {
     pub thread_id: String,
     /// Shell command string evaluated by the thread's configured shell.

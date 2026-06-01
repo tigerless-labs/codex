@@ -270,6 +270,12 @@ struct DebugPromptInputCommand {
     /// Optional image(s) to attach to the user prompt.
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     images: Vec<PathBuf>,
+
+    /// Print a token breakdown of the assembled context (system prompt,
+    /// built-in tools, MCP tools, and conversation input incl. per-tool
+    /// output) instead of the raw input JSON.
+    #[arg(long = "tokens", default_value_t = false)]
+    tokens: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -1961,6 +1967,19 @@ async fn run_debug_prompt_input_command(
     let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
         config.codex_home.clone(),
     ));
+
+    if cmd.tokens {
+        let b = codex_core::build_context_breakdown(
+            config,
+            input,
+            /*state_db*/ None,
+            user_instructions_provider,
+        )
+        .await?;
+        print_context_breakdown(&b);
+        return Ok(());
+    }
+
     let prompt_input = codex_core::build_prompt_input(
         config,
         input,
@@ -1971,6 +1990,39 @@ async fn run_debug_prompt_input_command(
     println!("{}", serde_json::to_string_pretty(&prompt_input)?);
 
     Ok(())
+}
+
+/// Render a [`codex_core::ContextBreakdown`] as a human-readable report.
+fn print_context_breakdown(b: &codex_core::ContextBreakdown) {
+    let window = b
+        .context_window
+        .map(|w| w.to_string())
+        .unwrap_or_else(|| "?".to_string());
+    println!("Codex context breakdown (in-process, o200k_base)");
+    println!();
+    println!("  system prompt : {:>9}", b.system_prompt_tokens);
+    println!("  builtin tools : {:>9}", b.builtin_tools_tokens);
+    println!("  mcp tools     : {:>9}", b.mcp_tools_tokens);
+    println!("  input (msgs)  : {:>9}", b.input_tokens);
+    println!("  ------------------------------");
+    println!("  total         : {:>9}  / window {window}", b.total_tokens);
+    println!();
+    println!("  tools (largest first):");
+    for t in b.per_tool.iter().take(25) {
+        println!("    {:<34} {:>8}", t.label, t.tokens);
+    }
+    println!();
+    println!("  input by kind:");
+    for k in &b.per_input_kind {
+        println!("    {:<34} {:>8}  ({} items)", k.label, k.tokens, k.count);
+    }
+    if !b.per_tool_output.is_empty() {
+        println!();
+        println!("  tool OUTPUT tokens by tool:");
+        for t in &b.per_tool_output {
+            println!("    {:<34} {:>8}  ({} calls)", t.label, t.tokens, t.count);
+        }
+    }
 }
 
 async fn run_debug_models_command(

@@ -189,6 +189,18 @@ impl CodexThread {
         self.codex.submit(op).await
     }
 
+    /// Compute the in-process context-floor token breakdown for this thread's
+    /// live session — the data behind a native `/context`. Assembles the same
+    /// `instructions` + `tools` + `input` the next request would send and
+    /// tokenizes each with `o200k_base`.
+    pub async fn context_breakdown(&self) -> CodexResult<codex_tools::ContextBreakdown> {
+        crate::prompt_debug::build_context_breakdown_from_session(
+            self.codex.session.as_ref(),
+            Vec::new(),
+        )
+        .await
+    }
+
     /// Returns the session telemetry handle for thread-scoped production instrumentation.
     pub fn session_telemetry(&self) -> SessionTelemetry {
         self.codex.session.services.session_telemetry.clone()
