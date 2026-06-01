@@ -543,6 +543,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadCompactStartResponse,
     },
+    /// Compute the in-process context-floor token breakdown for a thread.
+    ContextBreakdown => "thread/context/breakdown" {
+        params: v2::ContextBreakdownParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ContextBreakdownResponse,
+    },
     ThreadShellCommand => "thread/shellCommand" {
         params: v2::ThreadShellCommandParams,
         serialization: thread_id(params.thread_id),

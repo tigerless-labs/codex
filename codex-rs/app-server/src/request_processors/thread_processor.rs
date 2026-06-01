@@ -560,6 +560,52 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn context_breakdown(
+        &self,
+        _request_id: &ConnectionRequestId,
+        params: ContextBreakdownParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.context_breakdown_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    async fn context_breakdown_inner(
+        &self,
+        params: ContextBreakdownParams,
+    ) -> Result<ContextBreakdownResponse, JSONRPCErrorError> {
+        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        let b = thread
+            .context_breakdown()
+            .await
+            .map_err(|err| internal_error(format!("failed to compute context breakdown: {err}")))?;
+
+        fn map_buckets(
+            buckets: impl IntoIterator<Item = codex_core::TokenBucket>,
+        ) -> Vec<ContextTokenBucket> {
+            buckets
+                .into_iter()
+                .map(|t| ContextTokenBucket {
+                    label: t.label,
+                    tokens: t.tokens as u64,
+                    count: t.count as u64,
+                })
+                .collect()
+        }
+
+        Ok(ContextBreakdownResponse {
+            system_prompt_tokens: b.system_prompt_tokens as u64,
+            builtin_tools_tokens: b.builtin_tools_tokens as u64,
+            mcp_tools_tokens: b.mcp_tools_tokens as u64,
+            input_tokens: b.input_tokens as u64,
+            total_tokens: b.total_tokens as u64,
+            context_window: b.context_window,
+            per_tool: map_buckets(b.per_tool),
+            per_input_kind: map_buckets(b.per_input_kind),
+            per_tool_output: map_buckets(b.per_tool_output),
+        })
+    }
+
     pub(crate) async fn thread_background_terminals_clean(
         &self,
         request_id: &ConnectionRequestId,

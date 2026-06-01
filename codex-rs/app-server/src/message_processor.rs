@@ -1066,6 +1066,11 @@ impl MessageProcessor {
                     .thread_compact_start(&request_id, params)
                     .await
             }
+            ClientRequest::ContextBreakdown { params, .. } => {
+                self.thread_processor
+                    .context_breakdown(&request_id, params)
+                    .await
+            }
             ClientRequest::ThreadBackgroundTerminalsClean { params, .. } => {
                 self.thread_processor
                     .thread_background_terminals_clean(&request_id, params)

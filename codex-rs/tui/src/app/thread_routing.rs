@@ -697,6 +697,15 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            AppCommand::ContextBreakdown => {
+                match app_server.context_breakdown(thread_id).await {
+                    Ok(resp) => self.chat_widget.add_context_breakdown_output(resp),
+                    Err(err) => self
+                        .chat_widget
+                        .add_error_message(format!("/context failed: {err}")),
+                }
+                Ok(true)
+            }
             _ => Ok(false),
         }
     }

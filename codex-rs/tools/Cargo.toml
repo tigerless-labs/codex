@@ -27,6 +27,7 @@ rmcp = { workspace = true, default-features = false, features = [
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tiktoken-rs = "0.11"
 tracing = { workspace = true }
 urlencoding = { workspace = true }
 
