@@ -69,13 +69,13 @@ pub(crate) mod plugins;
 #[doc(hidden)]
 pub(crate) mod prompt_debug;
 #[doc(hidden)]
-pub use prompt_debug::build_prompt_input;
-#[doc(hidden)]
-pub use prompt_debug::build_context_breakdown;
-#[doc(hidden)]
 pub use codex_tools::ContextBreakdown;
 #[doc(hidden)]
 pub use codex_tools::TokenBucket;
+#[doc(hidden)]
+pub use prompt_debug::build_context_breakdown;
+#[doc(hidden)]
+pub use prompt_debug::build_prompt_input;
 pub(crate) mod mentions {
     pub(crate) use crate::plugins::build_connector_slug_counts;
     pub(crate) use crate::plugins::build_skill_name_counts;

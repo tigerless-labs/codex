@@ -3819,6 +3819,7 @@ dependencies = [
 name = "codex-tools"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "codex-app-server-protocol",
  "codex-code-mode",

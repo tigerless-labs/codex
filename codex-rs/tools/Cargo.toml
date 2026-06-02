@@ -8,6 +8,7 @@ version.workspace = true
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-code-mode = { workspace = true }
@@ -27,7 +28,7 @@ rmcp = { workspace = true, default-features = false, features = [
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tiktoken-rs = "0.11"
+tiktoken-rs = { workspace = true }
 tracing = { workspace = true }
 urlencoding = { workspace = true }
 

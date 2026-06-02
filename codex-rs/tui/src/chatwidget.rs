@@ -1536,13 +1536,7 @@ impl ChatWidget {
         lines.push(format!("  builtin tools : {:>9}", b.builtin_tools_tokens).into());
         lines.push(format!("  mcp tools     : {:>9}", b.mcp_tools_tokens).into());
         lines.push(format!("  input (msgs)  : {:>9}", b.input_tokens).into());
-        lines.push(
-            format!(
-                "  total         : {:>9}  / window {window}",
-                b.total_tokens
-            )
-            .into(),
-        );
+        lines.push(format!("  total         : {:>9}  / window {window}", b.total_tokens).into());
         if !b.per_tool.is_empty() {
             lines.push("".into());
             lines.push("  tools (largest first):".into());
@@ -1554,14 +1548,18 @@ impl ChatWidget {
             lines.push("".into());
             lines.push("  input by kind:".into());
             for k in &b.per_input_kind {
-                lines.push(format!("    {:<32} {:>8}  ({} items)", k.label, k.tokens, k.count).into());
+                lines.push(
+                    format!("    {:<32} {:>8}  ({} items)", k.label, k.tokens, k.count).into(),
+                );
             }
         }
         if !b.per_tool_output.is_empty() {
             lines.push("".into());
             lines.push("  tool OUTPUT tokens by tool:".into());
             for t in &b.per_tool_output {
-                lines.push(format!("    {:<32} {:>8}  ({} calls)", t.label, t.tokens, t.count).into());
+                lines.push(
+                    format!("    {:<32} {:>8}  ({} calls)", t.label, t.tokens, t.count).into(),
+                );
             }
         }
         self.add_plain_history_lines(lines);

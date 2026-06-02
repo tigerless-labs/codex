@@ -81,7 +81,7 @@ pub fn compute_context_breakdown(
     tools: &[ToolSpec],
     input: &[ResponseItem],
     context_window: Option<i64>,
-) -> Result<ContextBreakdown, serde_json::Error> {
+) -> anyhow::Result<ContextBreakdown> {
     let tools_json = create_tools_json_for_responses_api(tools)?;
     compute_context_breakdown_from_serialized(instructions, &tools_json, input, context_window)
 }
@@ -94,8 +94,8 @@ pub fn compute_context_breakdown_from_serialized(
     tools_json: &[Value],
     input: &[ResponseItem],
     context_window: Option<i64>,
-) -> Result<ContextBreakdown, serde_json::Error> {
-    let bpe = tiktoken_rs::o200k_base().expect("o200k_base encoding is bundled with tiktoken-rs");
+) -> anyhow::Result<ContextBreakdown> {
+    let bpe = tiktoken_rs::o200k_base()?;
 
     let system_prompt_tokens = count_with(&bpe, instructions);
 
@@ -111,9 +111,13 @@ pub fn compute_context_breakdown_from_serialized(
         } else {
             builtin_tools_tokens += tokens;
         }
-        per_tool.push(TokenBucket { label: name, tokens, count: 1 });
+        per_tool.push(TokenBucket {
+            label: name,
+            tokens,
+            count: 1,
+        });
     }
-    per_tool.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+    per_tool.sort_by_key(|b| std::cmp::Reverse(b.tokens));
 
     // --- input items ---
     // First map call_id -> tool name so outputs can be attributed.
@@ -146,7 +150,10 @@ pub fn compute_context_breakdown_from_serialized(
             | ResponseItem::ToolSearchCall { .. } => "tool call".to_string(),
             ResponseItem::FunctionCallOutput { call_id, .. }
             | ResponseItem::CustomToolCallOutput { call_id, .. } => {
-                let name = call_names.get(call_id.as_str()).copied().unwrap_or("(unknown)");
+                let name = call_names
+                    .get(call_id.as_str())
+                    .copied()
+                    .unwrap_or("(unknown)");
                 let e = tool_out.entry(name.to_string()).or_insert((0, 0));
                 e.0 += tokens;
                 e.1 += 1;
@@ -187,9 +194,13 @@ pub fn compute_context_breakdown_from_serialized(
 fn into_sorted_buckets(map: HashMap<String, (usize, usize)>) -> Vec<TokenBucket> {
     let mut v: Vec<TokenBucket> = map
         .into_iter()
-        .map(|(label, (tokens, count))| TokenBucket { label, tokens, count })
+        .map(|(label, (tokens, count))| TokenBucket {
+            label,
+            tokens,
+            count,
+        })
         .collect();
-    v.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+    v.sort_by_key(|b| std::cmp::Reverse(b.tokens));
     v
 }
 
@@ -257,7 +268,10 @@ mod tests {
         .expect("breakdown");
 
         assert!(b.system_prompt_tokens > 0);
-        assert!(b.builtin_tools_tokens > 0, "exec_command counted as builtin");
+        assert!(
+            b.builtin_tools_tokens > 0,
+            "exec_command counted as builtin"
+        );
         assert!(b.mcp_tools_tokens > 0, "mcp__ tool counted as MCP");
         assert_eq!(b.per_tool.len(), 2);
         // The exec_command output is attributed to exec_command.
