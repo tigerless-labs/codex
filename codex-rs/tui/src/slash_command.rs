@@ -107,7 +107,9 @@ impl SlashCommand {
             }
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
-            SlashCommand::Context => "show the exact context-floor token breakdown (system prompt, tools, MCP, input)",
+            SlashCommand::Context => {
+                "show the exact context-floor token breakdown (system prompt, tools, MCP, input)"
+            }
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
