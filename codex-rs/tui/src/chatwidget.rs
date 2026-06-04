@@ -891,6 +891,306 @@ fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsage
     }
 }
 
+#[derive(Debug)]
+struct ContextBreakdownHistoryCell {
+    breakdown: codex_app_server_protocol::ContextBreakdownResponse,
+}
+
+impl HistoryCell for ContextBreakdownHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let available_inner_width = usize::from(width.saturating_sub(4));
+        if available_inner_width == 0 {
+            return Vec::new();
+        }
+
+        let lines = self.content_lines(available_inner_width);
+        let content_width = lines
+            .iter()
+            .map(crate::line_truncation::line_width)
+            .max()
+            .unwrap_or(0);
+        let inner_width = content_width.min(available_inner_width);
+        let truncated_lines = lines
+            .into_iter()
+            .map(|line| crate::line_truncation::truncate_line_to_width(line, inner_width))
+            .collect();
+
+        history_cell::with_border_with_inner_width(truncated_lines, inner_width)
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        history_cell::plain_lines(self.display_lines(u16::MAX))
+    }
+}
+
+impl ContextBreakdownHistoryCell {
+    fn content_lines(&self, available_inner_width: usize) -> Vec<Line<'static>> {
+        let b = &self.breakdown;
+        let window = b.context_window.and_then(|w| u64::try_from(w).ok());
+        let window_label = window
+            .map(compact_context_tokens)
+            .unwrap_or_else(|| "?".to_string());
+        let remaining_label = window
+            .map(|window| compact_context_tokens(window.saturating_sub(b.total_tokens)))
+            .unwrap_or_else(|| "?".to_string());
+        let percent_used = window
+            .filter(|window| *window > 0)
+            .map(|window| b.total_tokens as f64 * 100.0 / window as f64);
+        let percent_used_label = percent_used
+            .map(|percent| format!("{percent:.1}%"))
+            .unwrap_or_else(|| "--".to_string());
+        let pressure_label = percent_used.map(context_pressure_label).unwrap_or("--");
+
+        let summary_label_width = context_table_label_width(available_inner_width, 30);
+        let detail_label_width = context_table_label_width(available_inner_width, 32);
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(" Context breakdown".bold().into());
+        lines.push(
+            vec![
+                " used ".dim(),
+                compact_context_tokens(b.total_tokens).into(),
+                "  window ".dim(),
+                window_label.into(),
+                "  %used ".dim(),
+                percent_used_label.into(),
+                "  pressure ".dim(),
+                pressure_label.into(),
+                "  remaining ".dim(),
+                remaining_label.into(),
+            ]
+            .into(),
+        );
+        lines.push("".into());
+        lines.push(context_table_header(summary_label_width));
+        lines.push(context_summary_line(
+            "System prompt",
+            b.system_prompt_tokens,
+            b.total_tokens,
+            window,
+            summary_label_width,
+        ));
+        lines.push(context_summary_line(
+            "Built-in tool definitions",
+            b.builtin_tools_tokens,
+            b.total_tokens,
+            window,
+            summary_label_width,
+        ));
+        lines.push(context_summary_line(
+            "MCP tool definitions",
+            b.mcp_tools_tokens,
+            b.total_tokens,
+            window,
+            summary_label_width,
+        ));
+        if !b.per_input_kind.is_empty() {
+            lines.push(" Input items".dim().into());
+            for k in &b.per_input_kind {
+                lines.push(context_summary_line(
+                    &k.label,
+                    k.tokens,
+                    b.total_tokens,
+                    window,
+                    summary_label_width,
+                ));
+            }
+        }
+        lines.push(context_total_summary_line(
+            b.total_tokens,
+            window,
+            summary_label_width,
+        ));
+        if !b.per_tool.is_empty() {
+            lines.push("".into());
+            lines.push(" Top tool definitions".bold().into());
+            lines.push(context_table_header(detail_label_width));
+            let top_tool_limit = 10;
+            for t in b.per_tool.iter().take(top_tool_limit) {
+                lines.push(context_detail_line(
+                    &t.label,
+                    t.tokens,
+                    b.total_tokens,
+                    window,
+                    detail_label_width,
+                    None,
+                ));
+            }
+            if b.per_tool.len() > top_tool_limit {
+                lines.push(
+                    format!(
+                        " showing top {top_tool_limit} of {} tools",
+                        b.per_tool.len()
+                    )
+                    .dim()
+                    .into(),
+                );
+            }
+        }
+        if !b.per_input_kind.is_empty() {
+            lines.push("".into());
+            lines.push(" Input by kind".bold().into());
+            lines.push(context_table_header(detail_label_width));
+            for k in &b.per_input_kind {
+                lines.push(context_detail_line(
+                    &k.label,
+                    k.tokens,
+                    b.total_tokens,
+                    window,
+                    detail_label_width,
+                    Some(context_pluralized_count(k.count, "item", "items")),
+                ));
+            }
+        }
+        if !b.per_tool_output.is_empty() {
+            lines.push("".into());
+            lines.push(" Tool outputs".bold().into());
+            lines.push(context_table_header(detail_label_width));
+            for t in &b.per_tool_output {
+                lines.push(context_detail_line(
+                    &t.label,
+                    t.tokens,
+                    b.total_tokens,
+                    window,
+                    detail_label_width,
+                    Some(context_pluralized_count(t.count, "call", "calls")),
+                ));
+            }
+        }
+        lines
+    }
+}
+
+fn compact_context_tokens(tokens: u64) -> String {
+    if tokens < 1_000 {
+        return tokens.to_string();
+    }
+
+    let tokens = tokens as f64;
+    let (scaled, suffix) = if tokens >= 1_000_000_000_000.0 {
+        (tokens / 1_000_000_000_000.0, "t")
+    } else if tokens >= 1_000_000_000.0 {
+        (tokens / 1_000_000_000.0, "b")
+    } else if tokens >= 1_000_000.0 {
+        (tokens / 1_000_000.0, "m")
+    } else {
+        (tokens / 1_000.0, "k")
+    };
+
+    format!("{scaled:.1}{suffix}")
+}
+
+fn exact_context_tokens(tokens: u64) -> String {
+    tokens
+        .to_string()
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(std::str::from_utf8)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("digits are valid utf-8")
+        .join(",")
+}
+
+fn context_percent_of_total(tokens: u64, total: u64) -> String {
+    if total == 0 {
+        return "--".to_string();
+    }
+
+    let percent = tokens as f64 * 100.0 / total as f64;
+    format!("{percent:.1}%")
+}
+
+fn context_percent_of_window(tokens: u64, window: Option<u64>) -> String {
+    let Some(window) = window.filter(|window| *window > 0) else {
+        return "--".to_string();
+    };
+
+    let percent = tokens as f64 * 100.0 / window as f64;
+    format!("{percent:.1}%")
+}
+
+fn context_pressure_label(percent: f64) -> &'static str {
+    match percent {
+        percent if percent < 50.0 => "low",
+        percent if percent < 80.0 => "medium",
+        _ => "high",
+    }
+}
+
+fn context_table_label_width(available_inner_width: usize, preferred: usize) -> usize {
+    const NUMERIC_COLUMNS_WIDTH: usize = 24;
+    available_inner_width
+        .saturating_sub(NUMERIC_COLUMNS_WIDTH)
+        .clamp(8, preferred)
+}
+
+fn context_table_header(label_width: usize) -> Line<'static> {
+    Line::from(vec![
+        format!(" {:<label_width$}", "Source").dim(),
+        format!("{:>8}", "Tokens").dim(),
+        format!("{:>8}", "%total").dim(),
+        format!("{:>8}", "%window").dim(),
+    ])
+}
+
+fn context_summary_line(
+    label: &str,
+    tokens: u64,
+    total: u64,
+    window: Option<u64>,
+    label_width: usize,
+) -> Line<'static> {
+    Line::from(vec![
+        format!(" {label:<label_width$}").into(),
+        format!("{:>8}", compact_context_tokens(tokens)).into(),
+        format!("{:>8}", context_percent_of_total(tokens, total)).dim(),
+        format!("{:>8}", context_percent_of_window(tokens, window)).dim(),
+    ])
+}
+
+fn context_total_summary_line(
+    total: u64,
+    window: Option<u64>,
+    label_width: usize,
+) -> Line<'static> {
+    Line::from(vec![
+        format!(" {:<label_width$}", "Total").bold(),
+        format!("{:>8}", compact_context_tokens(total)).bold(),
+        format!("{:>8}", context_percent_of_total(total, total))
+            .dim()
+            .bold(),
+        format!("{:>8}", context_percent_of_window(total, window))
+            .dim()
+            .bold(),
+    ])
+}
+
+fn context_detail_line(
+    label: &str,
+    tokens: u64,
+    total: u64,
+    window: Option<u64>,
+    label_width: usize,
+    detail: Option<String>,
+) -> Line<'static> {
+    let mut spans = vec![
+        format!(" {label:<label_width$}").into(),
+        format!("{:>8}", compact_context_tokens(tokens)).into(),
+        format!("{:>8}", context_percent_of_total(tokens, total)).dim(),
+        format!("{:>8}", context_percent_of_window(tokens, window)).dim(),
+        format!("  ({})", exact_context_tokens(tokens)).dim(),
+    ];
+    if let Some(detail) = detail {
+        spans.push(format!("; {detail}").dim());
+    }
+    Line::from(spans)
+}
+
+fn context_pluralized_count(count: u64, singular: &str, plural: &str) -> String {
+    let label = if count == 1 { singular } else { plural };
+    format!("{count} {label}")
+}
+
 impl ChatWidget {
     /// Stores or overwrites the cached nickname and role for a collab agent thread.
     ///
@@ -1525,44 +1825,7 @@ impl ChatWidget {
         &mut self,
         b: codex_app_server_protocol::ContextBreakdownResponse,
     ) {
-        let window = b
-            .context_window
-            .map(|w| w.to_string())
-            .unwrap_or_else(|| "?".to_string());
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push("/context".magenta().into());
-        lines.push("".into());
-        lines.push(format!("  system prompt : {:>9}", b.system_prompt_tokens).into());
-        lines.push(format!("  builtin tools : {:>9}", b.builtin_tools_tokens).into());
-        lines.push(format!("  mcp tools     : {:>9}", b.mcp_tools_tokens).into());
-        lines.push(format!("  input (msgs)  : {:>9}", b.input_tokens).into());
-        lines.push(format!("  total         : {:>9}  / window {window}", b.total_tokens).into());
-        if !b.per_tool.is_empty() {
-            lines.push("".into());
-            lines.push("  tools (largest first):".into());
-            for t in b.per_tool.iter().take(20) {
-                lines.push(format!("    {:<32} {:>8}", t.label, t.tokens).into());
-            }
-        }
-        if !b.per_input_kind.is_empty() {
-            lines.push("".into());
-            lines.push("  input by kind:".into());
-            for k in &b.per_input_kind {
-                lines.push(
-                    format!("    {:<32} {:>8}  ({} items)", k.label, k.tokens, k.count).into(),
-                );
-            }
-        }
-        if !b.per_tool_output.is_empty() {
-            lines.push("".into());
-            lines.push("  tool OUTPUT tokens by tool:".into());
-            for t in &b.per_tool_output {
-                lines.push(
-                    format!("    {:<32} {:>8}  ({} calls)", t.label, t.tokens, t.count).into(),
-                );
-            }
-        }
-        self.add_plain_history_lines(lines);
+        self.add_to_history(ContextBreakdownHistoryCell { breakdown: b });
     }
 
     pub(crate) fn add_warning_message(&mut self, message: String) {
