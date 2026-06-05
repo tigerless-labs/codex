@@ -140,9 +140,14 @@ pub(crate) async fn build_prompt_and_window_from_session(
     sess: &Session,
     input: Vec<UserInput>,
 ) -> CodexResult<(crate::client_common::Prompt, Option<i64>)> {
-    let turn_context = sess.new_default_turn().await;
-    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+    let turn_context = sess
+        .new_default_turn_with_sub_id("context-preview".to_string())
         .await;
+    let mut prompt_history = sess.clone_history().await;
+    let context_items = sess.build_context_update_items(turn_context.as_ref()).await;
+    if !context_items.is_empty() {
+        prompt_history.record_items(context_items.iter(), turn_context.truncation_policy);
+    }
 
     if !input.is_empty() {
         let response_item = sess.response_item_from_user_input(turn_context.as_ref(), input);
@@ -150,10 +155,7 @@ pub(crate) async fn build_prompt_and_window_from_session(
             .await;
     }
 
-    let prompt_input = sess
-        .clone_history()
-        .await
-        .for_prompt(&turn_context.model_info.input_modalities);
+    let prompt_input = prompt_history.for_prompt(&turn_context.model_info.input_modalities);
     let router = built_tools(sess, turn_context.as_ref(), &CancellationToken::new()).await?;
     let base_instructions = sess.get_base_instructions().await;
     let prompt = build_prompt(
@@ -185,3 +187,7 @@ pub(crate) async fn build_context_breakdown_from_session(
     )
     .map_err(|e| CodexErr::Fatal(format!("context breakdown serialization failed: {e}")))
 }
+
+#[cfg(test)]
+#[path = "prompt_debug_tests.rs"]
+mod tests;

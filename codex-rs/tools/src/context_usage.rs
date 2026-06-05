@@ -11,6 +11,8 @@
 //! what is actually sent. Input items are serialized via their `ResponseItem`
 //! serde representation, which is the wire shape too.
 
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use codex_protocol::models::ResponseItem;
@@ -52,6 +54,35 @@ pub struct ContextBreakdown {
     pub context_window: Option<i64>,
 }
 
+/// One native-vs-request token validation row.
+#[cfg(test)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ContextBreakdownValidationRow {
+    pub component: String,
+    pub native: usize,
+    pub request: usize,
+    pub delta: isize,
+}
+
+/// One native-vs-request MCP tool validation row.
+#[cfg(test)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct McpToolBreakdownValidationRow {
+    pub server: String,
+    pub tool: String,
+    pub native: usize,
+    pub request: usize,
+    pub delta: isize,
+}
+
+/// Validation that native `/context` accounting matches request-shaped data.
+#[cfg(test)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ContextBreakdownValidation {
+    pub components: Vec<ContextBreakdownValidationRow>,
+    pub mcp_tools: Vec<McpToolBreakdownValidationRow>,
+}
+
 /// Count `o200k_base` tokens. Builds the encoder once per call; callers doing
 /// many breakdowns should prefer [`Counter`].
 fn count_with(bpe: &tiktoken_rs::CoreBPE, text: &str) -> usize {
@@ -70,6 +101,12 @@ fn tool_name_from_json(json: &Value) -> String {
 
 fn is_mcp_tool(name: &str) -> bool {
     name.starts_with("mcp__")
+}
+
+#[cfg(test)]
+fn split_mcp_tool_name(name: &str) -> Option<(&str, &str)> {
+    let rest = name.strip_prefix("mcp__")?;
+    rest.split_once("__")
 }
 
 /// Compute the breakdown from a [`Prompt`](crate)'s components.
@@ -191,6 +228,91 @@ pub fn compute_context_breakdown_from_serialized(
     })
 }
 
+/// Compare native `/context` accounting against the same request components
+/// after they have been shaped as a Responses API request.
+#[cfg(test)]
+pub fn validate_context_breakdown_against_serialized_request(
+    instructions: &str,
+    tools: &[ToolSpec],
+    request_tools_json: &[Value],
+    input: &[ResponseItem],
+    context_window: Option<i64>,
+) -> anyhow::Result<ContextBreakdownValidation> {
+    let native = compute_context_breakdown(instructions, tools, input, context_window)?;
+    let request = compute_context_breakdown_from_serialized(
+        instructions,
+        request_tools_json,
+        input,
+        context_window,
+    )?;
+
+    let components = vec![
+        validation_row(
+            "instructions",
+            native.system_prompt_tokens,
+            request.system_prompt_tokens,
+        ),
+        validation_row(
+            "built-in tool definitions",
+            native.builtin_tools_tokens,
+            request.builtin_tools_tokens,
+        ),
+        validation_row(
+            "MCP tool definitions",
+            native.mcp_tools_tokens,
+            request.mcp_tools_tokens,
+        ),
+        validation_row("messages/input", native.input_tokens, request.input_tokens),
+        validation_row("total", native.total_tokens, request.total_tokens),
+    ];
+
+    let request_mcp_tokens: BTreeMap<_, _> = request
+        .per_tool
+        .iter()
+        .filter(|bucket| is_mcp_tool(&bucket.label))
+        .map(|bucket| (bucket.label.as_str(), bucket.tokens))
+        .collect();
+    let mut mcp_tools = native
+        .per_tool
+        .iter()
+        .filter_map(|bucket| {
+            let (server, tool) = split_mcp_tool_name(&bucket.label)?;
+            let request_tokens = request_mcp_tokens
+                .get(bucket.label.as_str())
+                .copied()
+                .unwrap_or(0);
+            Some(McpToolBreakdownValidationRow {
+                server: server.to_string(),
+                tool: tool.to_string(),
+                native: bucket.tokens,
+                request: request_tokens,
+                delta: token_delta(bucket.tokens, request_tokens),
+            })
+        })
+        .collect::<Vec<_>>();
+    mcp_tools.sort_by(|a, b| a.server.cmp(&b.server).then_with(|| a.tool.cmp(&b.tool)));
+
+    Ok(ContextBreakdownValidation {
+        components,
+        mcp_tools,
+    })
+}
+
+#[cfg(test)]
+fn validation_row(component: &str, native: usize, request: usize) -> ContextBreakdownValidationRow {
+    ContextBreakdownValidationRow {
+        component: component.to_string(),
+        native,
+        request,
+        delta: token_delta(native, request),
+    }
+}
+
+#[cfg(test)]
+fn token_delta(native: usize, request: usize) -> isize {
+    native as isize - request as isize
+}
+
 fn into_sorted_buckets(map: HashMap<String, (usize, usize)>) -> Vec<TokenBucket> {
     let mut v: Vec<TokenBucket> = map
         .into_iter()
@@ -209,6 +331,7 @@ mod tests {
     use super::*;
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
+    use pretty_assertions::assert_eq;
 
     fn func_call(call_id: &str, name: &str, args: &str) -> ResponseItem {
         ResponseItem::FunctionCall {
@@ -228,6 +351,17 @@ mod tests {
                 success: Some(true),
             },
         }
+    }
+
+    fn function_tool(name: &str, description: &str) -> ToolSpec {
+        ToolSpec::Function(crate::ResponsesApiTool {
+            name: name.to_string(),
+            description: description.to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: crate::JsonSchema::default(),
+            output_schema: None,
+        })
     }
 
     #[test]
@@ -281,6 +415,70 @@ mod tests {
         assert_eq!(
             b.total_tokens,
             b.system_prompt_tokens + b.builtin_tools_tokens + b.mcp_tools_tokens + b.input_tokens
+        );
+    }
+
+    #[test]
+    fn validates_native_breakdown_against_serialized_request_tools() {
+        let instructions = "You are Codex.";
+        let tools = vec![
+            function_tool("exec_command", "Runs a command."),
+            function_tool("mcp__codex_apps__google_drive", "Access Google Drive."),
+        ];
+        let request_tools_json =
+            create_tools_json_for_responses_api(&tools).expect("serialize request tools");
+        let input = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![],
+                phase: None,
+            },
+            func_call("call_1", "mcp__codex_apps__google_drive", "{}"),
+        ];
+
+        let validation = validate_context_breakdown_against_serialized_request(
+            instructions,
+            &tools,
+            &request_tools_json,
+            &input,
+            Some(272_000),
+        )
+        .expect("validation");
+
+        assert_eq!(
+            validation
+                .components
+                .iter()
+                .map(|row| (row.component.as_str(), row.delta))
+                .collect::<Vec<_>>(),
+            vec![
+                ("instructions", 0),
+                ("built-in tool definitions", 0),
+                ("MCP tool definitions", 0),
+                ("messages/input", 0),
+                ("total", 0),
+            ]
+        );
+        assert_eq!(
+            validation
+                .mcp_tools
+                .iter()
+                .map(|row| (
+                    row.server.as_str(),
+                    row.tool.as_str(),
+                    row.native,
+                    row.request,
+                    row.delta
+                ))
+                .collect::<Vec<_>>(),
+            vec![(
+                "codex_apps",
+                "google_drive",
+                validation.mcp_tools[0].native,
+                validation.mcp_tools[0].native,
+                0
+            )]
         );
     }
 }
