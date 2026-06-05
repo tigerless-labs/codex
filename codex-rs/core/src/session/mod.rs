@@ -2883,6 +2883,23 @@ impl Session {
         state.reference_context_item()
     }
 
+    pub(crate) async fn build_context_update_items(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
+        let reference_context_item = {
+            let state = self.state.lock().await;
+            state.reference_context_item()
+        };
+        if reference_context_item.is_none() {
+            self.build_initial_context(turn_context).await
+        } else {
+            // Steady-state path: append only context diffs to minimize token overhead.
+            self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
+                .await
+        }
+    }
+
     /// Persist the latest turn context snapshot for the first real user turn and for
     /// steady-state turns that emit model-visible context updates.
     ///
@@ -2900,18 +2917,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) {
-        let reference_context_item = {
-            let state = self.state.lock().await;
-            state.reference_context_item()
-        };
-        let should_inject_full_context = reference_context_item.is_none();
-        let context_items = if should_inject_full_context {
-            self.build_initial_context(turn_context).await
-        } else {
-            // Steady-state path: append only context diffs to minimize token overhead.
-            self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
-                .await
-        };
+        let context_items = self.build_context_update_items(turn_context).await;
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)

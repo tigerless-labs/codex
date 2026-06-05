@@ -1,0 +1,29 @@
+---
+source: tui/src/chatwidget/tests/context_breakdown.rs
+expression: rendered
+---
+╭───────────────────────────────────────────────────────────────────────────────────────╮
+│  Context breakdown                                                                    │
+│  used 16.9k  window 272.0k  %used 6.2%  pressure low  remaining 255.1k                │
+│                                                                                       │
+│  Summary                                                                              │
+│  Source                          Tokens  %total %window                               │
+│  System prompt                     1.2k    7.1%    0.4%                               │
+│  Built-in tool definitions         1.1k    6.3%    0.4%                               │
+│  MCP tool definitions             10.6k   62.8%    3.9%                               │
+│  Messages                          4.0k   23.7%    1.5%                               │
+│  Total                            16.9k  100.0%    6.2%                               │
+│                                                                                       │
+│  Details                                                                              │
+│  ─ Built-in tool definitions ───────────────────────────────────────────              │
+│    update_goal                                                390    2.3%  [━       ] │
+│    exec_command                                               342    2.0%  [━       ] │
+│    request_user_input                                         287    1.7%  [━       ] │
+│    apply_patch                                                250    1.5%  [━       ] │
+│                                                                                       │
+│  ─ MCP tool definitions ────────────────────────────────────────────────              │
+│    codex_apps                                               10.0k   59.3%  [━━━━━   ] │
+│      └─ google_drive                                        10.0k   59.3%  [━━━━━   ] │
+│    openaiDeveloperDocs                                        603    3.6%  [━       ] │
+│      └─ mcp__openaiDeveloperDocs                              603    3.6%  [━       ] │
+╰───────────────────────────────────────────────────────────────────────────────────────╯
