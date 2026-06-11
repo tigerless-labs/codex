@@ -449,6 +449,7 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Context => {
+                self.add_context_command_prompt("/context".to_string());
                 self.submit_op(AppCommand::context_breakdown(ContextBreakdownMode::Compact));
             }
             SlashCommand::Ide => {
@@ -660,9 +661,16 @@ impl ChatWidget {
             },
             SlashCommand::Context => match trimmed.to_ascii_lowercase().as_str() {
                 "" | "compact" => {
+                    let command_line = if trimmed.is_empty() {
+                        "/context".to_string()
+                    } else {
+                        format!("/context {trimmed}")
+                    };
+                    self.add_context_command_prompt(command_line);
                     self.submit_op(AppCommand::context_breakdown(ContextBreakdownMode::Compact));
                 }
                 "full" | "--full" => {
+                    self.add_context_command_prompt(format!("/context {trimmed}"));
                     self.submit_op(AppCommand::context_breakdown(ContextBreakdownMode::Full));
                 }
                 _ => self.add_error_message(CONTEXT_USAGE.to_string()),

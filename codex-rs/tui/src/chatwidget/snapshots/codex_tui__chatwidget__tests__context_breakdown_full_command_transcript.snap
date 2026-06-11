@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/context_breakdown.rs
 expression: rendered
 ---
+/context full
+
 ╭───────────────────────────────────────────────────────────────────────╮
 │  >_ Context breakdown                                                 │
 │                                                                       │
@@ -16,19 +18,4 @@ expression: rendered
 │  Skills:                      [░░░░░░░░░░░░░░░░░░░░]   0.2%  (600)    │
 │  Messages:                    [░░░░░░░░░░░░░░░░░░░░]   1.2%  (3.4k)   │
 │  Free space:                  [███████████████████░]  93.8%  (255.1k) │
-│                                                                       │
-│  Details:                                                             │
-│  System tools:                                                        │
-│   update_goal:                                 2.3%    (390)          │
-│   exec_command:                                2.0%    (342)          │
-│   request_user_input:                          1.7%    (287)          │
-│   apply_patch:                                 1.5%    (250)          │
-│                                                                       │
-│  MCP tools:                                                           │
-│   codex_apps:                                 59.3%    (10.0k)        │
-│     google_drive:                             59.3%    (10.0k)        │
-│   openaiDeveloperDocs:                         3.6%    (603)          │
-│     mcp__openaiDeveloperDocs:                  3.6%    (603)          │
-│                                                                       │
-│  Run /context full to show full details.                              │
 ╰───────────────────────────────────────────────────────────────────────╯

@@ -43,4 +43,6 @@ expression: rendered
 │     tool_3:                                    1.6%    (270)          │
 │     ... 1 more tools not shown                                        │
 │   ... 2 more MCP servers not shown                                    │
+│                                                                       │
+│  Run /context full to show full details.                              │
 ╰───────────────────────────────────────────────────────────────────────╯

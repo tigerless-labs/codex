@@ -1062,6 +1062,8 @@ impl ContextBreakdownHistoryCell {
                 ));
             }
         }
+        lines.push("".into());
+        lines.push(" Run /context full to show full details.".dim().into());
         lines
     }
 
@@ -1937,6 +1939,10 @@ impl ChatWidget {
         mode: ContextBreakdownMode,
     ) {
         self.add_to_history(ContextBreakdownHistoryCell { breakdown: b, mode });
+    }
+
+    fn add_context_command_prompt(&mut self, command_line: String) {
+        self.add_to_history(PlainHistoryCell::new(vec![command_line.magenta().into()]));
     }
 
     pub(crate) fn add_warning_message(&mut self, message: String) {
