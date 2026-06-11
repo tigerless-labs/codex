@@ -929,6 +929,7 @@ pub struct ContextBreakdownResponse {
     pub system_prompt_tokens: u64,
     pub builtin_tools_tokens: u64,
     pub mcp_tools_tokens: u64,
+    pub skills_tokens: u64,
     pub input_tokens: u64,
     pub total_tokens: u64,
     pub context_window: Option<i64>,

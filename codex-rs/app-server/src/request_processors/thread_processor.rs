@@ -599,6 +599,7 @@ impl ThreadRequestProcessor {
             system_prompt_tokens: b.system_prompt_tokens as u64,
             builtin_tools_tokens: b.builtin_tools_tokens as u64,
             mcp_tools_tokens: b.mcp_tools_tokens as u64,
+            skills_tokens: b.skills_tokens as u64,
             input_tokens: b.input_tokens as u64,
             total_tokens: b.total_tokens as u64,
             context_window: b.context_window,

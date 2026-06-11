@@ -6,6 +6,7 @@
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
 use super::*;
+use crate::app_command::ContextBreakdownMode;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
@@ -33,6 +34,7 @@ const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
+const CONTEXT_USAGE: &str = "Usage: /context [full|--full]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 
 impl ChatWidget {
@@ -447,7 +449,7 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Context => {
-                self.submit_op(AppCommand::context_breakdown());
+                self.submit_op(AppCommand::context_breakdown(ContextBreakdownMode::Compact));
             }
             SlashCommand::Ide => {
                 self.handle_ide_command();
@@ -655,6 +657,15 @@ impl ChatWidget {
             SlashCommand::Mcp => match trimmed.to_ascii_lowercase().as_str() {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
+            },
+            SlashCommand::Context => match trimmed.to_ascii_lowercase().as_str() {
+                "" | "compact" => {
+                    self.submit_op(AppCommand::context_breakdown(ContextBreakdownMode::Compact));
+                }
+                "full" | "--full" => {
+                    self.submit_op(AppCommand::context_breakdown(ContextBreakdownMode::Full));
+                }
+                _ => self.add_error_message(CONTEXT_USAGE.to_string()),
             },
             SlashCommand::Keymap => match trimmed.to_ascii_lowercase().as_str() {
                 "" => self.open_keymap_picker(),

@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::anyhow;
+use anyhow::bail;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ContextBreakdown;
 use codex_tools::compute_context_breakdown_from_serialized;
@@ -13,6 +16,7 @@ struct Args {
     request_json: Option<PathBuf>,
     raw_jsonl: Option<PathBuf>,
     expected_mcp: Vec<String>,
+    show_provider_usage: bool,
 }
 
 #[derive(Debug)]
@@ -20,6 +24,12 @@ struct CapturedRequest {
     label: String,
     body: Value,
     usage: Option<Value>,
+}
+
+#[derive(Debug)]
+struct ExtractedRequestBody {
+    source_path: String,
+    body: Value,
 }
 
 #[derive(Debug)]
@@ -33,17 +43,20 @@ fn main() -> Result<()> {
     let args = parse_args()?;
     let requests = load_requests(&args)?;
     if requests.is_empty() {
-        bail!("no request bodies containing instructions/tools/input were found");
+        bail!("{}", no_request_bodies_error(&args));
     }
 
     let mut had_error = false;
     for (idx, req) in requests.iter().enumerate() {
         let display_index = idx + 1;
         println!("Request #{display_index}: {}", req.label);
+        println!("  input items: {}", input_item_count(&req.body));
         let breakdown = compute_breakdown(&req.body)
             .with_context(|| format!("failed to compute context breakdown for {}", req.label))?;
         print_component_table(&breakdown);
-        if let Some(usage) = &req.usage {
+        if args.show_provider_usage
+            && let Some(usage) = &req.usage
+        {
             print_provider_usage(usage, breakdown.total_tokens);
         }
 
@@ -91,6 +104,9 @@ fn parse_args() -> Result<Args> {
                         .ok_or_else(|| anyhow!("--expected-mcp requires a tool name"))?,
                 );
             }
+            "--show-provider-usage" => {
+                args.show_provider_usage = true;
+            }
             "-h" | "--help" => {
                 print_usage();
                 std::process::exit(0);
@@ -107,7 +123,7 @@ fn parse_args() -> Result<Args> {
 
 fn print_usage() {
     println!(
-        "Usage:\n  context_breakdown_parity --request-json <path> [--expected-mcp <name>...]\n  context_breakdown_parity --raw-jsonl <path> [--expected-mcp <name>...]"
+        "Usage:\n  context_breakdown_parity --request-json <path> [--expected-mcp <name>...] [--show-provider-usage]\n  context_breakdown_parity --raw-jsonl <path> [--expected-mcp <name>...] [--show-provider-usage]"
     );
 }
 
@@ -118,7 +134,7 @@ fn load_requests(args: &Args) -> Result<Vec<CapturedRequest>> {
             .with_context(|| format!("failed to read {}", path.display()))?;
         let value: Value = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse {}", path.display()))?;
-        let body = extract_request_body(&value).ok_or_else(|| {
+        let extracted = extract_request_body(&value).ok_or_else(|| {
             anyhow!(
                 "{} does not contain instructions/tools/input",
                 path.display()
@@ -126,8 +142,8 @@ fn load_requests(args: &Args) -> Result<Vec<CapturedRequest>> {
         })?;
         let usage = extract_usage(&value);
         requests.push(CapturedRequest {
-            label: path.display().to_string(),
-            body,
+            label: format!("{} ({})", path.display(), extracted.source_path),
+            body: extracted.body,
             usage,
         });
     }
@@ -142,10 +158,10 @@ fn load_requests(args: &Args) -> Result<Vec<CapturedRequest>> {
             let value: Value = serde_json::from_str(line).with_context(|| {
                 format!("failed to parse {} line {}", path.display(), line_idx + 1)
             })?;
-            if let Some(body) = extract_request_body(&value) {
+            if let Some(extracted) = extract_request_body(&value) {
                 requests.push(CapturedRequest {
-                    label: format!("{}:{}", path.display(), line_idx + 1),
-                    body,
+                    label: raw_jsonl_label(path, line_idx + 1, &value, &extracted.source_path),
+                    body: extracted.body,
                     usage: extract_usage(&value),
                 });
             }
@@ -154,13 +170,17 @@ fn load_requests(args: &Args) -> Result<Vec<CapturedRequest>> {
     Ok(requests)
 }
 
-fn extract_request_body(value: &Value) -> Option<Value> {
+fn extract_request_body(value: &Value) -> Option<ExtractedRequestBody> {
     let direct = parse_body_candidate(value)?;
     if is_responses_request(&direct) {
-        return Some(direct);
+        return Some(ExtractedRequestBody {
+            source_path: ".".to_string(),
+            body: direct,
+        });
     }
 
     let candidates: &[&[&str]] = &[
+        &["frame"],
         &["request"],
         &["body"],
         &["request_body"],
@@ -175,7 +195,10 @@ fn extract_request_body(value: &Value) -> Option<Value> {
     for path in candidates {
         if let Some(candidate) = get_path(value, path).and_then(parse_body_candidate) {
             if is_responses_request(&candidate) {
-                return Some(candidate);
+                return Some(ExtractedRequestBody {
+                    source_path: format_json_path(path),
+                    body: candidate,
+                });
             }
         }
     }
@@ -204,6 +227,75 @@ fn is_responses_request(value: &Value) -> bool {
         && value.get("input").is_some()
 }
 
+fn format_json_path(path: &[&str]) -> String {
+    format!(".{}", path.join("."))
+}
+
+fn raw_jsonl_label(
+    path: &std::path::Path,
+    line_number: usize,
+    value: &Value,
+    source_path: &str,
+) -> String {
+    let mut parts = vec![source_path.to_string()];
+    if let Some(request_type) = value.get("type").and_then(Value::as_str) {
+        parts.push(request_type.to_string());
+    }
+    if let Some(request_path) = value.get("path").and_then(Value::as_str) {
+        parts.push(request_path.to_string());
+    }
+    format!(
+        "{} line {} ({})",
+        path.display(),
+        line_number,
+        parts.join(", ")
+    )
+}
+
+fn input_item_count(body: &Value) -> usize {
+    body.get("input")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+fn no_request_bodies_error(args: &Args) -> String {
+    let mut lines = vec![
+        "no request bodies containing instructions/tools/input were found".to_string(),
+        "looked for Responses request bodies at: ., .frame, .request, .body, .request_body, .request_json, .request.body, .request.json, .request.body_json, .request.request_body, .event.request, .event.body".to_string(),
+    ];
+    if let Some(path) = &args.raw_jsonl {
+        if let Ok(hints) = raw_jsonl_top_level_key_hints(path) {
+            if !hints.is_empty() {
+                lines.push("top-level keys seen in the first JSONL records:".to_string());
+                lines.extend(hints);
+            }
+        }
+    }
+    lines.join("\n")
+}
+
+fn raw_jsonl_top_level_key_hints(path: &PathBuf) -> Result<Vec<String>> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let mut hints = Vec::new();
+    for (line_idx, line) in text.lines().enumerate().take(5) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            hints.push(format!("  line {}: invalid JSON", line_idx + 1));
+            continue;
+        };
+        let Some(object) = value.as_object() else {
+            hints.push(format!("  line {}: non-object JSON value", line_idx + 1));
+            continue;
+        };
+        let keys = object.keys().cloned().collect::<Vec<_>>().join(", ");
+        hints.push(format!("  line {}: {}", line_idx + 1, keys));
+    }
+    Ok(hints)
+}
+
 fn extract_usage(value: &Value) -> Option<Value> {
     let candidates: &[&[&str]] = &[
         &["usage"],
@@ -211,6 +303,10 @@ fn extract_usage(value: &Value) -> Option<Value> {
         &["response_body", "usage"],
         &["response", "body", "usage"],
         &["body", "usage"],
+        &["frame", "usage"],
+        &["frame", "response", "usage"],
+        &["frame", "response_body", "usage"],
+        &["frame", "response", "body", "usage"],
     ];
     for path in candidates {
         if let Some(usage) = get_path(value, path) {
@@ -240,33 +336,30 @@ fn compute_breakdown(body: &Value) -> Result<ContextBreakdown> {
 }
 
 fn print_component_table(breakdown: &ContextBreakdown) {
-    println!("  Component                     request_log  recomputed  delta");
+    println!("  Context usage    request_log  recomputed  delta");
     print_row(
-        "instructions",
+        "System prompt",
         breakdown.system_prompt_tokens,
         breakdown.system_prompt_tokens,
     );
     print_row(
-        "built-in tool definitions",
+        "System tools",
         breakdown.builtin_tools_tokens,
         breakdown.builtin_tools_tokens,
     );
     print_row(
-        "MCP tool definitions",
+        "MCP tools",
         breakdown.mcp_tools_tokens,
         breakdown.mcp_tools_tokens,
     );
-    print_row(
-        "input/messages",
-        breakdown.input_tokens,
-        breakdown.input_tokens,
-    );
-    print_row("total", breakdown.total_tokens, breakdown.total_tokens);
+    print_row("Skills", breakdown.skills_tokens, breakdown.skills_tokens);
+    print_row("Messages", breakdown.input_tokens, breakdown.input_tokens);
+    print_row("Used total", breakdown.total_tokens, breakdown.total_tokens);
 }
 
 fn print_row(label: &str, request_log: usize, recomputed: usize) {
     let delta = recomputed as isize - request_log as isize;
-    println!("  {label:<29} {request_log:>11} {recomputed:>11} {delta:>6}");
+    println!("  {label:<15} {request_log:>11} {recomputed:>11} {delta:>6}");
 }
 
 fn print_provider_usage(usage: &Value, computed_total: usize) {

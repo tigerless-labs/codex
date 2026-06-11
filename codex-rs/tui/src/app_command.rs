@@ -96,7 +96,9 @@ pub(crate) enum AppCommand {
         cwds: Vec<PathBuf>,
         force_reload: bool,
     },
-    ContextBreakdown,
+    ContextBreakdown {
+        mode: ContextBreakdownMode,
+    },
     Compact,
     SetThreadName {
         name: String,
@@ -117,6 +119,12 @@ pub(crate) enum AppCommand {
 pub(crate) enum InterruptBehavior {
     Default,
     RestorePromptIfNoOutput,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) enum ContextBreakdownMode {
+    Compact,
+    Full,
 }
 
 impl AppCommand {
@@ -268,8 +276,8 @@ impl AppCommand {
         Self::ListSkills { cwds, force_reload }
     }
 
-    pub(crate) fn context_breakdown() -> Self {
-        Self::ContextBreakdown
+    pub(crate) fn context_breakdown(mode: ContextBreakdownMode) -> Self {
+        Self::ContextBreakdown { mode }
     }
 
     pub(crate) fn compact() -> Self {

@@ -168,6 +168,7 @@ impl SlashCommand {
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
+                | SlashCommand::Context
                 | SlashCommand::Raw
                 | SlashCommand::Pets
                 | SlashCommand::Side

@@ -336,12 +336,9 @@ pub(crate) fn compose_rate_limit_data_many(
     }
 }
 
-/// Renders a fixed-width progress bar from remaining percentage.
-///
-/// This function expects a remaining value in the `0..=100` range and clamps out-of-range input.
-/// Passing a used percentage by mistake will invert the bar and mislead users.
-pub(crate) fn render_status_limit_progress_bar(percent_remaining: f64) -> String {
-    let ratio = (percent_remaining / 100.0).clamp(0.0, 1.0);
+/// Renders a fixed-width progress bar from a filled percentage.
+pub(crate) fn render_status_progress_bar(percent_filled: f64) -> String {
+    let ratio = (percent_filled / 100.0).clamp(0.0, 1.0);
     let filled = (ratio * STATUS_LIMIT_BAR_SEGMENTS as f64).round() as usize;
     let filled = filled.min(STATUS_LIMIT_BAR_SEGMENTS);
     let empty = STATUS_LIMIT_BAR_SEGMENTS.saturating_sub(filled);
@@ -350,6 +347,14 @@ pub(crate) fn render_status_limit_progress_bar(percent_remaining: f64) -> String
         STATUS_LIMIT_BAR_FILLED.repeat(filled),
         STATUS_LIMIT_BAR_EMPTY.repeat(empty)
     )
+}
+
+/// Renders a fixed-width progress bar from remaining percentage.
+///
+/// This function expects a remaining value in the `0..=100` range and clamps out-of-range input.
+/// Passing a used percentage by mistake will invert the bar and mislead users.
+pub(crate) fn render_status_limit_progress_bar(percent_remaining: f64) -> String {
+    render_status_progress_bar(percent_remaining)
 }
 
 /// Formats a compact textual summary from remaining percentage.

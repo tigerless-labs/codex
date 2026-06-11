@@ -19,14 +19,28 @@ expression: rendered
 │                                                                       │
 │  Details:                                                             │
 │  System tools:                                                        │
-│   update_goal:                                 2.3%    (390)          │
-│   exec_command:                                2.0%    (342)          │
-│   request_user_input:                          1.7%    (287)          │
-│   apply_patch:                                 1.5%    (250)          │
+│   builtin_01:                                  8.8%    (1.5k)         │
+│   builtin_02:                                  8.8%    (1.5k)         │
+│   builtin_03:                                  8.7%    (1.5k)         │
+│   builtin_04:                                  8.7%    (1.5k)         │
+│   builtin_05:                                  8.6%    (1.4k)         │
+│   ... 9 more system tools not shown                                   │
 │                                                                       │
 │  MCP tools:                                                           │
-│   codex_apps:                                 59.3%    (10.0k)        │
-│     google_drive:                             59.3%    (10.0k)        │
-│   openaiDeveloperDocs:                         3.6%    (603)          │
-│     mcp__openaiDeveloperDocs:                  3.6%    (603)          │
+│   alpha:                                       6.5%    (1.1k)         │
+│     tool_1:                                    1.7%    (290)          │
+│     tool_2:                                    1.7%    (280)          │
+│     tool_3:                                    1.6%    (270)          │
+│     ... 1 more tools not shown                                        │
+│   bravo:                                       6.5%    (1.1k)         │
+│     tool_1:                                    1.7%    (290)          │
+│     tool_2:                                    1.7%    (280)          │
+│     tool_3:                                    1.6%    (270)          │
+│     ... 1 more tools not shown                                        │
+│   charlie:                                     6.5%    (1.1k)         │
+│     tool_1:                                    1.7%    (290)          │
+│     tool_2:                                    1.7%    (280)          │
+│     tool_3:                                    1.6%    (270)          │
+│     ... 1 more tools not shown                                        │
+│   ... 2 more MCP servers not shown                                    │
 ╰───────────────────────────────────────────────────────────────────────╯

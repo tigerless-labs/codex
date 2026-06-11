@@ -64,9 +64,10 @@ fn main() -> anyhow::Result<()> {
     );
     println!();
     println!("  system prompt : {:>8}", b.system_prompt_tokens);
-    println!("  builtin tools : {:>8}", b.builtin_tools_tokens);
+    println!("  system tools  : {:>8}", b.builtin_tools_tokens);
     println!("  mcp tools     : {:>8}", b.mcp_tools_tokens);
-    println!("  input (msgs)  : {:>8}", b.input_tokens);
+    println!("  skills        : {:>8}", b.skills_tokens);
+    println!("  messages      : {:>8}", b.input_tokens);
     println!("  ----------------------------");
     println!(
         "  total         : {:>8}  / window {:?}",
