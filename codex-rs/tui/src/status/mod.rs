@@ -29,6 +29,7 @@ pub(crate) use rate_limits::RateLimitWindowDisplay;
 #[cfg(test)]
 pub(crate) use rate_limits::rate_limit_snapshot_display;
 pub(crate) use rate_limits::rate_limit_snapshot_display_for_limit;
+pub(crate) use rate_limits::render_status_progress_bar;
 
 #[cfg(test)]
 mod tests;

@@ -43,6 +43,7 @@ use std::time::Instant;
 
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_command::AppCommand;
+use crate::app_command::ContextBreakdownMode;
 use crate::app_event::HistoryLookupResponse;
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_server_approval_conversions::file_update_changes_to_display;
@@ -78,6 +79,7 @@ use crate::status::StatusHistoryHandle;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
+use crate::status::render_status_progress_bar;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
@@ -894,6 +896,7 @@ fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsage
 #[derive(Debug)]
 struct ContextBreakdownHistoryCell {
     breakdown: codex_app_server_protocol::ContextBreakdownResponse,
+    mode: ContextBreakdownMode,
 }
 
 impl HistoryCell for ContextBreakdownHistoryCell {
@@ -925,6 +928,13 @@ impl HistoryCell for ContextBreakdownHistoryCell {
 
 impl ContextBreakdownHistoryCell {
     fn content_lines(&self, available_inner_width: usize) -> Vec<Line<'static>> {
+        match self.mode {
+            ContextBreakdownMode::Compact => self.compact_content_lines(available_inner_width),
+            ContextBreakdownMode::Full => self.full_content_lines(available_inner_width),
+        }
+    }
+
+    fn header_lines(&self) -> Vec<Line<'static>> {
         let b = &self.breakdown;
         let window = b.context_window.and_then(|w| u64::try_from(w).ok());
         let window_label = window
@@ -941,118 +951,180 @@ impl ContextBreakdownHistoryCell {
             .unwrap_or_else(|| "--".to_string());
         let pressure_label = percent_used.map(context_pressure_label).unwrap_or("--");
 
-        let summary_label_width = context_table_label_width(available_inner_width, 30);
-        let detail_label_width = context_detail_label_width(available_inner_width);
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(" Context breakdown".bold().into());
+        lines.push(" >_ Context breakdown".bold().into());
+        lines.push("".into());
         lines.push(
             vec![
-                " used ".dim(),
+                format!(" {:<12}", "Used:").dim(),
                 compact_context_tokens(b.total_tokens).into(),
-                "  window ".dim(),
+                " / ".dim(),
                 window_label.into(),
-                "  %used ".dim(),
+                "  (".dim(),
                 percent_used_label.into(),
-                "  pressure ".dim(),
-                pressure_label.into(),
-                "  remaining ".dim(),
+                ")".dim(),
+            ]
+            .into(),
+        );
+        lines.push(vec![format!(" {:<12}", "Pressure:").dim(), pressure_label.into()].into());
+        lines.push(
+            vec![
+                format!(" {:<12}", "Remaining:").dim(),
                 remaining_label.into(),
             ]
             .into(),
         );
-        lines.push("".into());
-        lines.push(" Summary".bold().into());
-        lines.push(context_table_header(summary_label_width));
-        lines.push(context_summary_line(
-            "System prompt",
-            b.system_prompt_tokens,
-            b.total_tokens,
-            window,
-            summary_label_width,
-        ));
-        lines.push(context_summary_line(
-            "Built-in tool definitions",
-            b.builtin_tools_tokens,
-            b.total_tokens,
-            window,
-            summary_label_width,
-        ));
-        lines.push(context_summary_line(
-            "MCP tool definitions",
-            b.mcp_tools_tokens,
-            b.total_tokens,
-            window,
-            summary_label_width,
-        ));
-        lines.push(context_summary_line(
-            "Messages",
-            b.input_tokens,
-            b.total_tokens,
-            window,
-            summary_label_width,
-        ));
-        lines.push(context_total_summary_line(
-            b.total_tokens,
-            window,
-            summary_label_width,
-        ));
+        lines
+    }
 
-        let (builtin_tools, mcp_tools): (Vec<_>, Vec<_>) = b
-            .per_tool
-            .iter()
-            .partition(|t| !is_mcp_context_tool(&t.label));
+    fn compact_content_lines(&self, available_inner_width: usize) -> Vec<Line<'static>> {
+        let b = &self.breakdown;
+        let details_label_width = context_breakdown_label_width(available_inner_width);
+        let usage_label_width = context_usage_label_width(available_inner_width);
+        let mut lines = self.header_lines();
+        lines.push("".into());
+        lines.push(" Context usage:".bold().into());
+        lines.extend(context_usage_lines(b, usage_label_width));
+
+        let (builtin_tools, mcp_tools) = self.tool_groups();
         if !builtin_tools.is_empty() || !mcp_tools.is_empty() {
             lines.push("".into());
-            lines.push(" Details".bold().into());
+            lines.push(" Details:".bold().into());
         }
         if !builtin_tools.is_empty() {
-            lines.push(context_separator_line(
-                "Built-in tool definitions",
-                available_inner_width,
-            ));
+            const COMPACT_BUILTIN_TOOL_LIMIT: usize = 5;
+            lines.push(" System tools:".into());
+            for t in builtin_tools.iter().take(COMPACT_BUILTIN_TOOL_LIMIT) {
+                lines.push(context_detail_line(
+                    &t.label,
+                    t.tokens,
+                    b.total_tokens,
+                    details_label_width,
+                    ContextDetailRowKind::Child,
+                ));
+            }
+            let hidden = builtin_tools
+                .len()
+                .saturating_sub(COMPACT_BUILTIN_TOOL_LIMIT);
+            if hidden > 0 {
+                lines.push(context_hidden_line(
+                    hidden,
+                    "more system tools not shown",
+                    ContextDetailRowKind::Child,
+                ));
+            }
+        }
+        if !mcp_tools.is_empty() {
+            const COMPACT_MCP_SERVER_LIMIT: usize = 3;
+            const COMPACT_MCP_TOOLS_PER_SERVER_LIMIT: usize = 3;
+
+            lines.push("".into());
+            lines.push(" MCP tools:".into());
+            let by_server = group_mcp_context_tools(mcp_tools);
+            let server_count = by_server.len();
+            for (server, tools) in by_server.into_iter().take(COMPACT_MCP_SERVER_LIMIT) {
+                let server_tokens = tools.iter().map(|(_, tool)| tool.tokens).sum();
+                lines.push(context_detail_line(
+                    &server,
+                    server_tokens,
+                    b.total_tokens,
+                    details_label_width,
+                    ContextDetailRowKind::Parent,
+                ));
+                for (tool_name, tool) in tools.iter().take(COMPACT_MCP_TOOLS_PER_SERVER_LIMIT) {
+                    lines.push(context_detail_line(
+                        tool_name,
+                        tool.tokens,
+                        b.total_tokens,
+                        details_label_width,
+                        ContextDetailRowKind::Grandchild,
+                    ));
+                }
+                let hidden = tools
+                    .len()
+                    .saturating_sub(COMPACT_MCP_TOOLS_PER_SERVER_LIMIT);
+                if hidden > 0 {
+                    lines.push(context_hidden_line(
+                        hidden,
+                        "more tools not shown",
+                        ContextDetailRowKind::Grandchild,
+                    ));
+                }
+            }
+            let hidden = server_count.saturating_sub(COMPACT_MCP_SERVER_LIMIT);
+            if hidden > 0 {
+                lines.push(context_hidden_line(
+                    hidden,
+                    "more MCP servers not shown",
+                    ContextDetailRowKind::Child,
+                ));
+            }
+        }
+        lines
+    }
+
+    fn full_content_lines(&self, available_inner_width: usize) -> Vec<Line<'static>> {
+        let b = &self.breakdown;
+        let label_width = context_breakdown_label_width(available_inner_width);
+        let usage_label_width = context_usage_label_width(available_inner_width);
+        let mut lines = self.header_lines();
+        lines.push("".into());
+        lines.push(" Context usage:".bold().into());
+        lines.extend(context_usage_lines(b, usage_label_width));
+
+        let (builtin_tools, mcp_tools) = self.tool_groups();
+        if !builtin_tools.is_empty() || !mcp_tools.is_empty() {
+            lines.push("".into());
+            lines.push(" Details:".bold().into());
+        }
+        if !builtin_tools.is_empty() {
+            lines.push(" System tools:".into());
             for t in builtin_tools {
                 lines.push(context_detail_line(
                     &t.label,
                     t.tokens,
                     b.total_tokens,
-                    detail_label_width,
+                    label_width,
                     ContextDetailRowKind::Child,
                 ));
             }
         }
         if !mcp_tools.is_empty() {
             lines.push("".into());
-            lines.push(context_separator_line(
-                "MCP tool definitions",
-                available_inner_width,
-            ));
-            let mut by_server: BTreeMap<String, Vec<_>> = BTreeMap::new();
-            for tool in mcp_tools {
-                let (server, tool_name) = split_mcp_context_tool_name(&tool.label);
-                by_server.entry(server).or_default().push((tool_name, tool));
-            }
-            for (server, tools) in by_server {
+            lines.push(" MCP tools:".into());
+            for (server, tools) in group_mcp_context_tools(mcp_tools) {
                 let server_tokens = tools.iter().map(|(_, tool)| tool.tokens).sum();
                 lines.push(context_detail_line(
                     &server,
                     server_tokens,
                     b.total_tokens,
-                    detail_label_width,
+                    label_width,
                     ContextDetailRowKind::Parent,
                 ));
                 for (tool_name, tool) in tools {
-                    let tool_label = format!("└─ {tool_name}");
                     lines.push(context_detail_line(
-                        &tool_label,
+                        &tool_name,
                         tool.tokens,
                         b.total_tokens,
-                        detail_label_width,
+                        label_width,
                         ContextDetailRowKind::Grandchild,
                     ));
                 }
             }
         }
         lines
+    }
+
+    fn tool_groups(
+        &self,
+    ) -> (
+        Vec<&codex_app_server_protocol::ContextTokenBucket>,
+        Vec<&codex_app_server_protocol::ContextTokenBucket>,
+    ) {
+        self.breakdown
+            .per_tool
+            .iter()
+            .partition(|t| !is_mcp_context_tool(&t.label))
     }
 }
 
@@ -1068,6 +1140,17 @@ fn split_mcp_context_tool_name(name: &str) -> (String, String) {
     rest.split_once("__")
         .map(|(server, tool)| (server.to_string(), tool.to_string()))
         .unwrap_or_else(|| (rest.to_string(), name.to_string()))
+}
+
+fn group_mcp_context_tools(
+    tools: Vec<&codex_app_server_protocol::ContextTokenBucket>,
+) -> BTreeMap<String, Vec<(String, &codex_app_server_protocol::ContextTokenBucket)>> {
+    let mut by_server: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    for tool in tools {
+        let (server, tool_name) = split_mcp_context_tool_name(&tool.label);
+        by_server.entry(server).or_default().push((tool_name, tool));
+    }
+    by_server
 }
 
 fn compact_context_tokens(tokens: u64) -> String {
@@ -1098,15 +1181,6 @@ fn context_percent_of_total(tokens: u64, total: u64) -> String {
     format!("{percent:.1}%")
 }
 
-fn context_percent_of_window(tokens: u64, window: Option<u64>) -> String {
-    let Some(window) = window.filter(|window| *window > 0) else {
-        return "--".to_string();
-    };
-
-    let percent = tokens as f64 * 100.0 / window as f64;
-    format!("{percent:.1}%")
-}
-
 fn context_pressure_label(percent: f64) -> &'static str {
     match percent {
         percent if percent < 50.0 => "low",
@@ -1115,71 +1189,73 @@ fn context_pressure_label(percent: f64) -> &'static str {
     }
 }
 
-fn context_table_label_width(available_inner_width: usize, preferred: usize) -> usize {
-    const NUMERIC_COLUMNS_WIDTH: usize = 28;
+fn context_breakdown_label_width(available_inner_width: usize) -> usize {
+    const NUMERIC_COLUMNS_WIDTH: usize = 18;
     available_inner_width
         .saturating_sub(NUMERIC_COLUMNS_WIDTH)
-        .clamp(8, preferred)
+        .clamp(28, 44)
 }
 
-fn context_detail_label_width(available_inner_width: usize) -> usize {
-    const DETAIL_NUMERIC_COLUMNS_WIDTH: usize = 29;
+fn context_usage_label_width(available_inner_width: usize) -> usize {
+    const BAR_AND_NUMERIC_COLUMNS_WIDTH: usize = 42;
     available_inner_width
-        .saturating_sub(DETAIL_NUMERIC_COLUMNS_WIDTH)
-        .clamp(8, 56)
+        .saturating_sub(BAR_AND_NUMERIC_COLUMNS_WIDTH)
+        .clamp(16, 28)
 }
 
-fn context_table_header(label_width: usize) -> Line<'static> {
-    Line::from(vec![
-        format!(" {:<label_width$}", "Source").dim(),
-        format!("{:>8}", "Tokens").dim(),
-        format!("{:>8}", "%total").dim(),
-        format!("{:>8}", "%window").dim(),
-    ])
+fn context_usage_lines(
+    b: &codex_app_server_protocol::ContextBreakdownResponse,
+    label_width: usize,
+) -> Vec<Line<'static>> {
+    let used_tokens = b
+        .system_prompt_tokens
+        .saturating_add(b.builtin_tools_tokens)
+        .saturating_add(b.mcp_tools_tokens)
+        .saturating_add(b.skills_tokens)
+        .saturating_add(b.input_tokens);
+    let window = b.context_window.and_then(|w| u64::try_from(w).ok());
+    let free_space_tokens = window
+        .map(|window| window.saturating_sub(used_tokens))
+        .unwrap_or(0);
+
+    [
+        ("System prompt", b.system_prompt_tokens),
+        ("System tools", b.builtin_tools_tokens),
+        ("MCP tools", b.mcp_tools_tokens),
+        ("Skills", b.skills_tokens),
+        ("Messages", b.input_tokens),
+        ("Free space", free_space_tokens),
+    ]
+    .into_iter()
+    .map(|(label, tokens)| context_usage_line(label, tokens, window, label_width))
+    .collect()
 }
 
-fn context_summary_line(
+fn context_usage_line(
     label: &str,
     tokens: u64,
-    total: u64,
     window: Option<u64>,
     label_width: usize,
 ) -> Line<'static> {
-    Line::from(vec![
-        format!(" {label:<label_width$}").into(),
-        format!("{:>8}", compact_context_tokens(tokens)).into(),
-        format!("{:>8}", context_percent_of_total(tokens, total)).dim(),
-        format!("{:>8}", context_percent_of_window(tokens, window)).dim(),
-    ])
-}
+    let percent = window
+        .filter(|window| *window > 0)
+        .map(|window| tokens as f64 * 100.0 / window as f64);
+    let percent_label = percent
+        .map(|percent| format!("{percent:.1}%"))
+        .unwrap_or_else(|| "--".to_string());
+    let bar = render_status_progress_bar(percent.unwrap_or(0.0));
+    let token_label = compact_context_tokens(tokens);
 
-fn context_total_summary_line(
-    total: u64,
-    window: Option<u64>,
-    label_width: usize,
-) -> Line<'static> {
     Line::from(vec![
-        format!(" {:<label_width$}", "Total").bold(),
-        format!("{:>8}", compact_context_tokens(total)).bold(),
-        format!("{:>8}", context_percent_of_total(total, total))
-            .dim()
-            .bold(),
-        format!("{:>8}", context_percent_of_window(total, window))
-            .dim()
-            .bold(),
-    ])
-}
-
-fn context_separator_line(label: &str, available_inner_width: usize) -> Line<'static> {
-    let separator_width = available_inner_width.min(72);
-    let prefix_width = label.chars().count() + 4;
-    Line::from(vec![
-        " ─ ".dim(),
-        label.to_string().bold(),
-        " ".dim(),
-        "─"
-            .repeat(separator_width.saturating_sub(prefix_width))
-            .dim(),
+        format!(" {label}:").dim(),
+        " ".repeat(label_width.saturating_sub(label.chars().count()))
+            .into(),
+        bar.into(),
+        " ".into(),
+        format!("{percent_label:>6}").into(),
+        "  (".dim(),
+        token_label.dim(),
+        ")".dim(),
     ])
 }
 
@@ -1197,31 +1273,30 @@ fn context_detail_line(
     kind: ContextDetailRowKind,
 ) -> Line<'static> {
     let label = match kind {
-        ContextDetailRowKind::Parent => format!("  {label}"),
-        ContextDetailRowKind::Child => format!("  {label}"),
-        ContextDetailRowKind::Grandchild => format!("    {label}"),
+        ContextDetailRowKind::Parent | ContextDetailRowKind::Child => format!("  {label}:"),
+        ContextDetailRowKind::Grandchild => format!("    {label}:"),
     };
-    let label = format!(" {label:<label_width$}");
+    let label = format!("{label:<label_width$}");
     let label = match kind {
         ContextDetailRowKind::Parent => label.into(),
         ContextDetailRowKind::Child | ContextDetailRowKind::Grandchild => label.dim(),
     };
-    const BAR_INNER_WIDTH: usize = 8;
-    let bar = if total == 0 || tokens == 0 {
-        " ".repeat(BAR_INNER_WIDTH)
-    } else {
-        let filled = ((tokens as f64 / total as f64) * BAR_INNER_WIDTH as f64).round() as usize;
-        let filled = filled.clamp(1, BAR_INNER_WIDTH);
-        format!("{:<BAR_INNER_WIDTH$}", "━".repeat(filled))
-    };
-    let bar = format!("[{bar}]");
+    let token_label = compact_context_tokens(tokens);
     Line::from(vec![
         label,
-        format!("{:>8}", compact_context_tokens(tokens)).into(),
-        format!("{:>8}", context_percent_of_total(tokens, total)).into(),
-        "  ".into(),
-        bar.dim(),
+        format!("{:>7}", context_percent_of_total(tokens, total)).into(),
+        "    (".dim(),
+        token_label.dim(),
+        ")".dim(),
     ])
+}
+
+fn context_hidden_line(count: usize, text: &str, kind: ContextDetailRowKind) -> Line<'static> {
+    let prefix = match kind {
+        ContextDetailRowKind::Parent | ContextDetailRowKind::Child => "  ",
+        ContextDetailRowKind::Grandchild => "    ",
+    };
+    format!("{prefix}... {count} {text}").dim().into()
 }
 
 impl ChatWidget {
@@ -1857,8 +1932,9 @@ impl ChatWidget {
     pub(crate) fn add_context_breakdown_output(
         &mut self,
         b: codex_app_server_protocol::ContextBreakdownResponse,
+        mode: ContextBreakdownMode,
     ) {
-        self.add_to_history(ContextBreakdownHistoryCell { breakdown: b });
+        self.add_to_history(ContextBreakdownHistoryCell { breakdown: b, mode });
     }
 
     pub(crate) fn add_warning_message(&mut self, message: String) {

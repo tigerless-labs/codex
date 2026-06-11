@@ -15,7 +15,10 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
+use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -42,7 +45,9 @@ pub struct ContextBreakdown {
     pub mcp_tools_tokens: usize,
     /// One entry per tool definition, largest first.
     pub per_tool: Vec<TokenBucket>,
-    /// Total tokens for the conversation `input` items.
+    /// Native skill context fragments within conversation `input` items.
+    pub skills_tokens: usize,
+    /// Conversation `input` tokens excluding native skill context fragments.
     pub input_tokens: usize,
     /// Input grouped by kind (`message:user`, `reasoning`, `tool call`, …).
     pub per_input_kind: Vec<TokenBucket>,
@@ -101,6 +106,46 @@ fn tool_name_from_json(json: &Value) -> String {
 
 fn is_mcp_tool(name: &str) -> bool {
     name.starts_with("mcp__")
+}
+
+fn is_native_skill_fragment_text(text: &str) -> bool {
+    matches_marked_text(
+        SKILLS_INSTRUCTIONS_OPEN_TAG,
+        SKILLS_INSTRUCTIONS_CLOSE_TAG,
+        text,
+    ) || matches_marked_text("<skill>", "</skill>", text)
+}
+
+fn matches_marked_text(start_marker: &str, end_marker: &str, text: &str) -> bool {
+    let trimmed = text.trim_start();
+    let starts_with_marker = trimmed
+        .get(..start_marker.len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(start_marker));
+    let trimmed = trimmed.trim_end();
+    let ends_with_marker = trimmed
+        .get(trimmed.len().saturating_sub(end_marker.len())..)
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(end_marker));
+    starts_with_marker && ends_with_marker
+}
+
+fn native_skill_fragment_tokens(
+    bpe: &tiktoken_rs::CoreBPE,
+    item: &ResponseItem,
+) -> anyhow::Result<usize> {
+    let ResponseItem::Message { content, .. } = item else {
+        return Ok(0);
+    };
+
+    content.iter().try_fold(0usize, |tokens, content_item| {
+        let ContentItem::InputText { text } = content_item else {
+            return Ok(tokens);
+        };
+        if is_native_skill_fragment_text(text) {
+            Ok(tokens + count_with(bpe, &serde_json::to_string(content_item)?))
+        } else {
+            Ok(tokens)
+        }
+    })
 }
 
 #[cfg(test)]
@@ -174,9 +219,13 @@ pub fn compute_context_breakdown_from_serialized(
     let mut kind: HashMap<String, (usize, usize)> = HashMap::new();
     let mut tool_out: HashMap<String, (usize, usize)> = HashMap::new();
     let mut input_tokens = 0usize;
+    let mut skills_tokens = 0usize;
     for item in input {
         let tokens = count_with(&bpe, &serde_json::to_string(item)?);
-        input_tokens += tokens;
+        let item_skills_tokens = native_skill_fragment_tokens(&bpe, item)?;
+        let item_input_tokens = tokens.saturating_sub(item_skills_tokens);
+        input_tokens += item_input_tokens;
+        skills_tokens += item_skills_tokens;
 
         let label = match item {
             ResponseItem::Message { role, .. } => format!("message:{role}"),
@@ -192,7 +241,7 @@ pub fn compute_context_breakdown_from_serialized(
                     .copied()
                     .unwrap_or("(unknown)");
                 let e = tool_out.entry(name.to_string()).or_insert((0, 0));
-                e.0 += tokens;
+                e.0 += item_input_tokens;
                 e.1 += 1;
                 "tool output".to_string()
             }
@@ -205,21 +254,25 @@ pub fn compute_context_breakdown_from_serialized(
             ResponseItem::Other => "other".to_string(),
         };
         let e = kind.entry(label).or_insert((0, 0));
-        e.0 += tokens;
+        e.0 += item_input_tokens;
         e.1 += 1;
     }
 
     let per_input_kind = into_sorted_buckets(kind);
     let per_tool_output = into_sorted_buckets(tool_out);
 
-    let total_tokens =
-        system_prompt_tokens + builtin_tools_tokens + mcp_tools_tokens + input_tokens;
+    let total_tokens = system_prompt_tokens
+        + builtin_tools_tokens
+        + mcp_tools_tokens
+        + skills_tokens
+        + input_tokens;
 
     Ok(ContextBreakdown {
         system_prompt_tokens,
         builtin_tools_tokens,
         mcp_tools_tokens,
         per_tool,
+        skills_tokens,
         input_tokens,
         per_input_kind,
         per_tool_output,
@@ -262,6 +315,7 @@ pub fn validate_context_breakdown_against_serialized_request(
             native.mcp_tools_tokens,
             request.mcp_tools_tokens,
         ),
+        validation_row("skills", native.skills_tokens, request.skills_tokens),
         validation_row("messages/input", native.input_tokens, request.input_tokens),
         validation_row("total", native.total_tokens, request.total_tokens),
     ];
@@ -364,6 +418,17 @@ mod tests {
         })
     }
 
+    fn text_message(role: &str, text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: role.to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            phase: None,
+        }
+    }
+
     #[test]
     fn categorizes_tools_and_attributes_outputs() {
         let instructions = "You are Codex.";
@@ -414,8 +479,87 @@ mod tests {
         assert!(b.per_tool_output[0].tokens > 0);
         assert_eq!(
             b.total_tokens,
-            b.system_prompt_tokens + b.builtin_tools_tokens + b.mcp_tools_tokens + b.input_tokens
+            b.system_prompt_tokens
+                + b.builtin_tools_tokens
+                + b.mcp_tools_tokens
+                + b.skills_tokens
+                + b.input_tokens
         );
+    }
+
+    #[test]
+    fn counts_available_skills_instructions_as_skills() {
+        let skill_text = format!(
+            "{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills\n- demo: useful\n{SKILLS_INSTRUCTIONS_CLOSE_TAG}"
+        );
+        let input = vec![text_message("developer", &skill_text)];
+
+        let b = compute_context_breakdown_from_serialized("base", &[], &input, None)
+            .expect("breakdown");
+
+        let bpe = tiktoken_rs::o200k_base().expect("bpe");
+        let expected_skill_tokens = count_with(
+            &bpe,
+            &serde_json::to_string(&ContentItem::InputText { text: skill_text })
+                .expect("serialize skill content"),
+        );
+        assert_eq!(b.skills_tokens, expected_skill_tokens);
+        assert!(b.input_tokens > 0, "message wrapper remains in Messages");
+        assert_eq!(
+            b.total_tokens,
+            b.system_prompt_tokens + b.skills_tokens + b.input_tokens
+        );
+    }
+
+    #[test]
+    fn counts_injected_skill_as_skills() {
+        let skill_text =
+            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>";
+        let input = vec![text_message("user", skill_text)];
+
+        let b = compute_context_breakdown_from_serialized("base", &[], &input, None)
+            .expect("breakdown");
+
+        assert!(b.skills_tokens > 0);
+        assert_eq!(
+            b.total_tokens,
+            b.system_prompt_tokens + b.skills_tokens + b.input_tokens
+        );
+    }
+
+    #[test]
+    fn normal_user_text_mentioning_skill_md_does_not_count_as_skills() {
+        let input = vec![text_message(
+            "user",
+            "Please read skills/demo/SKILL.md before answering.",
+        )];
+
+        let b = compute_context_breakdown_from_serialized("base", &[], &input, None)
+            .expect("breakdown");
+
+        assert_eq!(b.skills_tokens, 0);
+        assert!(b.input_tokens > 0);
+    }
+
+    #[test]
+    fn tool_output_with_skill_like_text_does_not_count_as_skills() {
+        let input = vec![
+            func_call(
+                "call_1",
+                "exec_command",
+                "{\"cmd\":\"cat skills/demo/SKILL.md\"}",
+            ),
+            func_output(
+                "call_1",
+                "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+            ),
+        ];
+
+        let b = compute_context_breakdown_from_serialized("base", &[], &input, None)
+            .expect("breakdown");
+
+        assert_eq!(b.skills_tokens, 0);
+        assert!(b.input_tokens > 0);
     }
 
     #[test]
@@ -456,6 +600,7 @@ mod tests {
                 ("instructions", 0),
                 ("built-in tool definitions", 0),
                 ("MCP tool definitions", 0),
+                ("skills", 0),
                 ("messages/input", 0),
                 ("total", 0),
             ]

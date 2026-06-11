@@ -196,6 +196,67 @@ async fn queued_slash_review_with_args_dispatches_after_active_turn() {
 }
 
 #[tokio::test]
+async fn context_slash_command_defaults_to_compact_mode() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Context);
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ContextBreakdown {
+            mode: crate::app_command::ContextBreakdownMode::Compact
+        })
+    );
+}
+
+#[tokio::test]
+async fn context_slash_command_accepts_full_and_compact_args() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Context, "full".to_string(), Vec::new());
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ContextBreakdown {
+            mode: crate::app_command::ContextBreakdownMode::Full
+        })
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Context, "--full".to_string(), Vec::new());
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ContextBreakdown {
+            mode: crate::app_command::ContextBreakdownMode::Full
+        })
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Context, "compact".to_string(), Vec::new());
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ContextBreakdown {
+            mode: crate::app_command::ContextBreakdownMode::Compact
+        })
+    );
+}
+
+#[tokio::test]
+async fn context_slash_command_rejects_unknown_args() {
+    let (mut chat, mut _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Context, "verbose".to_string(), Vec::new());
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let cells = drain_insert_history(&mut _rx);
+    let rendered = cells
+        .first()
+        .map(|cell| lines_to_single_string(cell))
+        .expect("expected usage error in history");
+    assert!(
+        rendered.contains("Usage: /context [full|--full]"),
+        "rendered: {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn queued_slash_review_with_args_restores_for_edit() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());

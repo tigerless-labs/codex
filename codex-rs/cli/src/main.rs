@@ -1893,9 +1893,10 @@ fn print_context_breakdown(b: &codex_core::ContextBreakdown) {
     println!("Codex context breakdown (in-process, o200k_base)");
     println!();
     println!("  system prompt : {:>9}", b.system_prompt_tokens);
-    println!("  builtin tools : {:>9}", b.builtin_tools_tokens);
+    println!("  system tools  : {:>9}", b.builtin_tools_tokens);
     println!("  mcp tools     : {:>9}", b.mcp_tools_tokens);
-    println!("  input (msgs)  : {:>9}", b.input_tokens);
+    println!("  skills        : {:>9}", b.skills_tokens);
+    println!("  messages      : {:>9}", b.input_tokens);
     println!("  ------------------------------");
     println!("  total         : {:>9}  / window {window}", b.total_tokens);
     println!();
