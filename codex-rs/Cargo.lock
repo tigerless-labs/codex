@@ -3947,7 +3947,6 @@ name = "codex-tools"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "codex-app-server-protocol",
  "codex-code-mode",
  "codex-features",
@@ -3964,6 +3963,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tiktoken-rs",
  "tracing",
  "urlencoding",
 ]
@@ -5862,6 +5862,17 @@ name = "fancy-regex"
 version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "998b056554fbe42e03ae0e152895cd1a7e1002aec800fdc6635d20270260c46f"
+dependencies = [
+ "bit-set",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "fancy-regex"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72cf461f865c862bb7dc573f643dd6a2b6842f7c30b07882b56bd148cc2761b8"
 dependencies = [
  "bit-set",
  "regex-automata",
@@ -9979,7 +9990,7 @@ dependencies = [
  "dupe",
  "either",
  "erased-serde 0.4.10",
- "fancy-regex",
+ "fancy-regex 0.16.2",
  "indexmap 2.14.0",
  "inventory",
  "num-bigint",
@@ -13425,6 +13436,21 @@ dependencies = [
  "quick-error",
  "weezl",
  "zune-jpeg 0.4.21",
+]
+
+[[package]]
+name = "tiktoken-rs"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fac4a168cfc1d8ed65bf17a6ee0843ad9a68f863c63c0fb2fa7eab67838782ee"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "bstr",
+ "fancy-regex 0.17.0",
+ "lazy_static",
+ "regex",
+ "rustc-hash 1.1.0",
 ]
 
 [[package]]
