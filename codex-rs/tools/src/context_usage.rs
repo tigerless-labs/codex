@@ -251,6 +251,7 @@ pub fn compute_context_breakdown_from_serialized(
             ResponseItem::Compaction { .. }
             | ResponseItem::CompactionTrigger
             | ResponseItem::ContextCompaction { .. } => "compaction".to_string(),
+            ResponseItem::AgentMessage { .. } => "agent_message".to_string(),
             ResponseItem::Other => "other".to_string(),
         };
         let e = kind.entry(label).or_insert((0, 0));

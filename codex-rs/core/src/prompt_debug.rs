@@ -81,6 +81,7 @@ pub async fn build_context_breakdown(
     mut config: Config,
     input: Vec<UserInput>,
     state_db: Option<StateDbHandle>,
+    user_instructions_provider: Arc<dyn UserInstructionsProvider>,
 ) -> CodexResult<ContextBreakdown> {
     config.ephemeral = true;
 
@@ -107,6 +108,7 @@ pub async fn build_context_breakdown(
             .map_err(|err| CodexErr::Fatal(err.to_string()))?,
         ),
         empty_extension_registry(),
+        user_instructions_provider,
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),
